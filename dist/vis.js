@@ -5,7 +5,7 @@
  * A dynamic, browser-based visualization library.
  *
  * @version 4.16.1
- * @date    2016-04-18
+ * @date    2016-05-07
  *
  * @license
  * Copyright (C) 2011-2016 Almende B.V, http://almende.com
@@ -11203,11 +11203,11 @@ return /******/ (function(modules) { // webpackBootstrap
 /* 22 */
 /***/ function(module, exports, __webpack_require__) {
 
-  var __WEBPACK_AMD_DEFINE_RESULT__;/*! Hammer.JS - v2.0.6 - 2015-12-23
+  var __WEBPACK_AMD_DEFINE_RESULT__;/*! Hammer.JS - v2.0.7 - 2016-04-22
    * http://hammerjs.github.io/
    *
-   * Copyright (c) 2015 Jorik Tangelder;
-   * Licensed under the  license */
+   * Copyright (c) 2016 Jorik Tangelder;
+   * Licensed under the MIT license */
   (function(window, document, exportName, undefined) {
     'use strict';
 
@@ -11335,7 +11335,7 @@ return /******/ (function(modules) { // webpackBootstrap
    * means that properties in dest will be overwritten by the ones in src.
    * @param {Object} dest
    * @param {Object} src
-   * @param {Boolean=false} [merge]
+   * @param {Boolean} [merge=false]
    * @returns {Object} dest
    */
   var extend = deprecate(function extend(dest, src, merge) {
@@ -11996,7 +11996,6 @@ return /******/ (function(modules) { // webpackBootstrap
       this.evEl = MOUSE_ELEMENT_EVENTS;
       this.evWin = MOUSE_WINDOW_EVENTS;
 
-      this.allow = true; // used by Input.TouchMouse to disable mouse events
       this.pressed = false; // mousedown state
 
       Input.apply(this, arguments);
@@ -12019,8 +12018,8 @@ return /******/ (function(modules) { // webpackBootstrap
               eventType = INPUT_END;
           }
 
-          // mouse must be down, and mouse events are allowed (see the TouchMouse input)
-          if (!this.pressed || !this.allow) {
+          // mouse must be down
+          if (!this.pressed) {
               return;
           }
 
@@ -12303,12 +12302,19 @@ return /******/ (function(modules) { // webpackBootstrap
    * @constructor
    * @extends Input
    */
+
+  var DEDUP_TIMEOUT = 2500;
+  var DEDUP_DISTANCE = 25;
+
   function TouchMouseInput() {
       Input.apply(this, arguments);
 
       var handler = bindFn(this.handler, this);
       this.touch = new TouchInput(this.manager, handler);
       this.mouse = new MouseInput(this.manager, handler);
+
+      this.primaryTouch = null;
+      this.lastTouches = [];
   }
 
   inherit(TouchMouseInput, Input, {
@@ -12322,17 +12328,15 @@ return /******/ (function(modules) { // webpackBootstrap
           var isTouch = (inputData.pointerType == INPUT_TYPE_TOUCH),
               isMouse = (inputData.pointerType == INPUT_TYPE_MOUSE);
 
-          // when we're in a touch event, so  block all upcoming mouse events
-          // most mobile browser also emit mouseevents, right after touchstart
-          if (isTouch) {
-              this.mouse.allow = false;
-          } else if (isMouse && !this.mouse.allow) {
+          if (isMouse && inputData.sourceCapabilities && inputData.sourceCapabilities.firesTouchEvents) {
               return;
           }
 
-          // reset the allowMouse when we're done
-          if (inputEvent & (INPUT_END | INPUT_CANCEL)) {
-              this.mouse.allow = true;
+          // when we're in a touch event, record touches to  de-dupe synthetic mouse event
+          if (isTouch) {
+              recordTouches.call(this, inputEvent, inputData);
+          } else if (isMouse && isSyntheticEvent.call(this, inputData)) {
+              return;
           }
 
           this.callback(manager, inputEvent, inputData);
@@ -12347,6 +12351,44 @@ return /******/ (function(modules) { // webpackBootstrap
       }
   });
 
+  function recordTouches(eventType, eventData) {
+      if (eventType & INPUT_START) {
+          this.primaryTouch = eventData.changedPointers[0].identifier;
+          setLastTouch.call(this, eventData);
+      } else if (eventType & (INPUT_END | INPUT_CANCEL)) {
+          setLastTouch.call(this, eventData);
+      }
+  }
+
+  function setLastTouch(eventData) {
+      var touch = eventData.changedPointers[0];
+
+      if (touch.identifier === this.primaryTouch) {
+          var lastTouch = {x: touch.clientX, y: touch.clientY};
+          this.lastTouches.push(lastTouch);
+          var lts = this.lastTouches;
+          var removeLastTouch = function() {
+              var i = lts.indexOf(lastTouch);
+              if (i > -1) {
+                  lts.splice(i, 1);
+              }
+          };
+          setTimeout(removeLastTouch, DEDUP_TIMEOUT);
+      }
+  }
+
+  function isSyntheticEvent(eventData) {
+      var x = eventData.srcEvent.clientX, y = eventData.srcEvent.clientY;
+      for (var i = 0; i < this.lastTouches.length; i++) {
+          var t = this.lastTouches[i];
+          var dx = Math.abs(x - t.x), dy = Math.abs(y - t.y);
+          if (dx <= DEDUP_DISTANCE && dy <= DEDUP_DISTANCE) {
+              return true;
+          }
+      }
+      return false;
+  }
+
   var PREFIXED_TOUCH_ACTION = prefixed(TEST_ELEMENT.style, 'touchAction');
   var NATIVE_TOUCH_ACTION = PREFIXED_TOUCH_ACTION !== undefined;
 
@@ -12357,6 +12399,7 @@ return /******/ (function(modules) { // webpackBootstrap
   var TOUCH_ACTION_NONE = 'none';
   var TOUCH_ACTION_PAN_X = 'pan-x';
   var TOUCH_ACTION_PAN_Y = 'pan-y';
+  var TOUCH_ACTION_MAP = getTouchActionProps();
 
   /**
    * Touch Action
@@ -12381,7 +12424,7 @@ return /******/ (function(modules) { // webpackBootstrap
               value = this.compute();
           }
 
-          if (NATIVE_TOUCH_ACTION && this.manager.element.style) {
+          if (NATIVE_TOUCH_ACTION && this.manager.element.style && TOUCH_ACTION_MAP[value]) {
               this.manager.element.style[PREFIXED_TOUCH_ACTION] = value;
           }
           this.actions = value.toLowerCase().trim();
@@ -12413,11 +12456,6 @@ return /******/ (function(modules) { // webpackBootstrap
        * @param {Object} input
        */
       preventDefaults: function(input) {
-          // not needed with native support for the touchAction property
-          if (NATIVE_TOUCH_ACTION) {
-              return;
-          }
-
           var srcEvent = input.srcEvent;
           var direction = input.offsetDirection;
 
@@ -12428,9 +12466,9 @@ return /******/ (function(modules) { // webpackBootstrap
           }
 
           var actions = this.actions;
-          var hasNone = inStr(actions, TOUCH_ACTION_NONE);
-          var hasPanY = inStr(actions, TOUCH_ACTION_PAN_Y);
-          var hasPanX = inStr(actions, TOUCH_ACTION_PAN_X);
+          var hasNone = inStr(actions, TOUCH_ACTION_NONE) && !TOUCH_ACTION_MAP[TOUCH_ACTION_NONE];
+          var hasPanY = inStr(actions, TOUCH_ACTION_PAN_Y) && !TOUCH_ACTION_MAP[TOUCH_ACTION_PAN_Y];
+          var hasPanX = inStr(actions, TOUCH_ACTION_PAN_X) && !TOUCH_ACTION_MAP[TOUCH_ACTION_PAN_X];
 
           if (hasNone) {
               //do not prevent defaults if this is a tap gesture
@@ -12499,6 +12537,21 @@ return /******/ (function(modules) { // webpackBootstrap
       }
 
       return TOUCH_ACTION_AUTO;
+  }
+
+  function getTouchActionProps() {
+      if (!NATIVE_TOUCH_ACTION) {
+          return false;
+      }
+      var touchMap = {};
+      var cssSupports = window.CSS && window.CSS.supports;
+      ['auto', 'manipulation', 'pan-y', 'pan-x', 'pan-x pan-y', 'none'].forEach(function(val) {
+
+          // If css.supports is not supported but there is native touch-action assume it supports
+          // all values. This is the case for IE 10 and 11.
+          touchMap[val] = cssSupports ? window.CSS.supports('touch-action', val) : true;
+      });
+      return touchMap;
   }
 
   /**
@@ -13297,7 +13350,7 @@ return /******/ (function(modules) { // webpackBootstrap
   /**
    * @const {string}
    */
-  Hammer.VERSION = '2.0.6';
+  Hammer.VERSION = '2.0.7';
 
   /**
    * default settings
@@ -13428,6 +13481,7 @@ return /******/ (function(modules) { // webpackBootstrap
       this.handlers = {};
       this.session = {};
       this.recognizers = [];
+      this.oldCssProps = {};
 
       this.element = element;
       this.input = createInputInstance(this);
@@ -13606,6 +13660,13 @@ return /******/ (function(modules) { // webpackBootstrap
        * @returns {EventEmitter} this
        */
       on: function(events, handler) {
+          if (events === undefined) {
+              return;
+          }
+          if (handler === undefined) {
+              return;
+          }
+
           var handlers = this.handlers;
           each(splitStr(events), function(event) {
               handlers[event] = handlers[event] || [];
@@ -13621,6 +13682,10 @@ return /******/ (function(modules) { // webpackBootstrap
        * @returns {EventEmitter} this
        */
       off: function(events, handler) {
+          if (events === undefined) {
+              return;
+          }
+
           var handlers = this.handlers;
           each(splitStr(events), function(event) {
               if (!handler) {
@@ -13685,9 +13750,19 @@ return /******/ (function(modules) { // webpackBootstrap
       if (!element.style) {
           return;
       }
+      var prop;
       each(manager.options.cssProps, function(value, name) {
-          element.style[prefixed(element.style, name)] = add ? value : '';
+          prop = prefixed(element.style, name);
+          if (add) {
+              manager.oldCssProps[prop] = element.style[prop];
+              element.style[prop] = value;
+          } else {
+              element.style[prop] = manager.oldCssProps[prop] || '';
+          }
       });
+      if (!add) {
+          manager.oldCssProps = {};
+      }
   }
 
   /**
@@ -28479,6 +28554,25 @@ return /******/ (function(modules) { // webpackBootstrap
   exports.network.convertGephi = function (input, options) {
     return exports.network.gephiParser.parseGephi(input, options);
   };
+  exports.network.shapes = {
+    CircleImageBase: __webpack_require__(70),
+    NodeBase: __webpack_require__(68),
+    ShapeBase: __webpack_require__(74),
+    Box: __webpack_require__(67),
+    Circle: __webpack_require__(69),
+    CircularImage: __webpack_require__(71),
+    Database: __webpack_require__(72),
+    Diamond: __webpack_require__(73),
+    Dot: __webpack_require__(75),
+    Ellipse: __webpack_require__(76),
+    Icon: __webpack_require__(77),
+    Image: __webpack_require__(78),
+    Square: __webpack_require__(79),
+    Star: __webpack_require__(80),
+    Text: __webpack_require__(81),
+    Triangle: __webpack_require__(82),
+    TriangleDown: __webpack_require__(83)
+  };
 
   // bundled external libraries
   exports.moment = __webpack_require__(2);
@@ -30182,6 +30276,8 @@ return /******/ (function(modules) { // webpackBootstrap
       value: function updateShape(currentShape) {
         if (currentShape === this.options.shape && this.shape) {
           this.shape.setOptions(this.options, this.imageObj);
+        } else if (this.options.customShape) {
+          this.shape = this.options.customShape(this.options, this.body, this.labelModule, this.imageObj);
         } else {
           // choose draw method depending on the shape
           switch (this.options.shape) {
@@ -30456,6 +30552,9 @@ return /******/ (function(modules) { // webpackBootstrap
         if (newOptions.scaling !== undefined) {
           util.mergeOptions(parentOptions.scaling, newOptions.scaling, 'label', allowDeletion, globalOptions.scaling);
         }
+
+        // merge the custom shape options into the parent
+        util.mergeOptions(parentOptions, newOptions, 'customShape', allowDeletion, globalOptions);
       }
     }]);
 
@@ -44221,6 +44320,7 @@ return /******/ (function(modules) { // webpackBootstrap
         __type__: { object: object, boolean: boolean }
       },
       shape: { string: ['ellipse', 'circle', 'database', 'box', 'text', 'image', 'circularImage', 'diamond', 'dot', 'star', 'triangle', 'triangleDown', 'square', 'icon'] },
+      customShape: { 'function': 'function' },
       shapeProperties: {
         borderDashes: { boolean: boolean, array: array },
         borderRadius: { number: number },
